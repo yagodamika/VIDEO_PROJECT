@@ -8,7 +8,7 @@ class Stabilizer:
     def __init__(self, capture: cv2.VideoCapture, output_path: str):
         self.cap = capture
         self.video_parameters = get_video_parameters(self.cap)
-        self.out_writer = build_out_writer(output_path, self.video_params)
+        self.out_writer = build_out_writer(output_path, self.video_parameters)
         self.transform_matrix = np.eye(3)
         
         # get first frame and write it to output video
