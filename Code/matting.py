@@ -2,8 +2,9 @@ import numpy as np
 import cv2
 from GeodisTK import geodesic2d_raster_scan
 from tqdm import tqdm
-from typing import Tuple, List
+from typing import Tuple
 import json
+from scipy.stats import gaussian_kde
 
 PADDING = 5
 
@@ -37,38 +38,44 @@ def get_trimap(binary_image: np.ndarray, kernel_size: int = 5) -> np.ndarray:
 
     return trimap
 
-def get_interest_crops(trimap: np.ndarray, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def get_interest_crop(array: np.ndarray, bounding_box: Tuple) -> np.ndarray:
     """
     This function returns a crop of area of interest 
     of the trimap and its corresponding image.
     Args:
-        trimap: a trimpap
+        trimap: a trimap
         image: the trimap's corresponding image 
     Return:
         cut_img: a crop of the image
         cut_trimap: acrop of the trimap
         bounding_box: a tuple containing bounding box parameters
     """
-    bounding_box = cv2.boundingRect(trimap.astype(np.uint8))
     x, y, w, h = bounding_box
     p = PADDING
-    cut_img = image[y-p : y+h+p, x-p : x+w+p]
-    cut_trimap = trimap[y-p : y+h+p, x-p : x+w+p]
+    cut = array[y-p : y+h+p, x-p : x+w+p]
     
-    return cut_img, cut_trimap, bounding_box
+    return cut
 
-def get_geodesic_dist_maps(cut_img, fg_st, bg_st):
-    fg_d_map = 1 / (geodesic2d_raster_scan(cut_img, fg_st, 1.0, 2) + 1e-6)
-    bg_d_map = 1 / (geodesic2d_raster_scan(cut_img, bg_st, 1.0, 2) + 1e-6)
+def get_geodesic_dist_maps(cut_luma, fg_st, bg_st):
+    fg_d_map = geodesic2d_raster_scan(cut_luma, fg_st, 1.0, 2) + 1e-6
+    bg_d_map = geodesic2d_raster_scan(cut_luma, bg_st, 1.0, 2) + 1e-6
     
     return fg_d_map, bg_d_map
 
-def get_alpha_vals_for_crop(cut_trimap, fg_d_map, bg_d_map):
+def get_alpha_vals_for_crop(cut_luma, cut_trimap, fg_d_map, bg_d_map, power=-1):
     alpha_cut = np.copy(cut_trimap)
     mask = (cut_trimap == 0.5)
     fg_distances = fg_d_map[mask]
     bg_distances = bg_d_map[mask]
-    alpha_values = fg_distances / (bg_distances + fg_distances)
+    
+    bg_pdf = gaussian_kde(cut_luma[cut_trimap==0])
+    bg_probs = bg_pdf.evaluate(cut_luma[mask])
+    fg_pdf = gaussian_kde(cut_luma[cut_trimap==1])
+    fg_probs = fg_pdf.evaluate(cut_luma[mask])
+    
+    w_b = bg_probs * (bg_distances ** power)
+    w_f = fg_probs * (fg_distances ** power)
+    alpha_values = w_f / (w_f + w_b)
     alpha_cut[mask] = alpha_values
     return alpha_cut
 
@@ -85,11 +92,14 @@ def get_alpha_map(binary_image: np.ndarray, image: np.ndarray):
                        bounding box used to create the alpha map 
     """
     trimap = get_trimap(binary_image)
+    yuv_image = cv2.cvtColor(image, cv2.COLOR_BGR2YUV)
+    luma_image = yuv_image[:, :, 0]
     
     # Identify a bounding rectangle that encloses the person 
-    cut_img, cut_trimap, bounding_box = get_interest_crops(trimap, image)
-    x, y, w, h = bounding_box 
-    p = PADDING
+    bounding_box = cv2.boundingRect(trimap.astype(np.uint8))
+    cut_img = get_interest_crop(image, bounding_box)
+    cut_trimap = get_interest_crop(trimap, bounding_box)
+    cut_luma = get_interest_crop(luma_image, bounding_box)
     
     # get foreground and background start places by trimap
     fg_st = np.ones_like(cut_trimap, dtype=np.uint8)
@@ -98,12 +108,14 @@ def get_alpha_map(binary_image: np.ndarray, image: np.ndarray):
     bg_st[cut_trimap != 0] = 0
         
     # get foreground and background geodesic distance maps
-    fg_d_map, bg_d_map = get_geodesic_dist_maps(cut_img, fg_st, bg_st)
+    fg_d_map, bg_d_map = get_geodesic_dist_maps(cut_luma, fg_st, bg_st)
     
     # get alpha values for crop
-    alpha_cut = get_alpha_vals_for_crop(cut_trimap, fg_d_map, bg_d_map)
+    alpha_cut = get_alpha_vals_for_crop(cut_luma, cut_trimap, fg_d_map, bg_d_map)
     
     # get alpha map 
+    x, y, w, h = bounding_box
+    p = PADDING
     alpha_map = np.copy(trimap)
     alpha_map[y-p: y+h+p, x-p:x+w+p] = alpha_cut
     
