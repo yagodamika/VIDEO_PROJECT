@@ -1,14 +1,15 @@
 import cv2
 import numpy as np
 from tqdm import tqdm
-from utils.video_utils_ref import get_video_parameters, build_out_writer
+
+from utils import parse_video, get_video_writer
 
 
 class Stabilizer:
     def __init__(self, capture: cv2.VideoCapture, output_path: str):
         self.cap = capture
-        self.video_parameters = get_video_parameters(self.cap)
-        self.out_writer = build_out_writer(output_path, self.video_parameters)
+        self.video_parameters = parse_video(self.cap)
+        self.out_writer = get_video_writer(output_path, self.video_parameters)
         self.transform_matrix = np.eye(3)
         
         # get first frame and write it to output video
@@ -26,12 +27,12 @@ class Stabilizer:
         :return: None
         """
         print("Video Stabilization")
-        for i in tqdm(range(1, self.video_parameters['frame_count'])):
+        for i in tqdm(range(1, self.video_parameters.frame_num)):
             _, frame = self.cap.read()
             # calculate transformation to the frame before
             transformation_matrix = self.get_transformation_mat(frame)
             # warp frame and write it to output video
-            frame_stabilized = cv2.warpPerspective(frame, transformation_matrix, (self.video_parameters["width"], self.video_parameters["height"]))
+            frame_stabilized = cv2.warpPerspective(frame, transformation_matrix, (self.video_parameters.frame_width, self.video_parameters.frame_height))
             self.out_writer.write(frame_stabilized)
 
     def get_transformation_mat(self, frame: np.ndarray) -> np.ndarray:

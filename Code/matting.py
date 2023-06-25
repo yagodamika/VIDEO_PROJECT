@@ -7,8 +7,7 @@ import json
 
 PADDING = 5
 
-#TODO: change
-from utils.video_utils_ref import get_video_parameters, build_out_writer
+from utils import parse_video, get_video_writer
 
 def get_trimap(binary_image: np.ndarray, kernel_size: int = 5) -> np.ndarray:
     """
@@ -201,15 +200,15 @@ class MattingMaker:
         self.capture = cap
         self.cap_binary = cap_binary
 
-        self.video_params = get_video_parameters(self.capture)
-        self.bg = cv2.resize(cv2.imread(bg_path), (self.video_params['width'], self.video_params['height']))
+        self.video_params = parse_video(self.capture)
+        self.bg = cv2.resize(cv2.imread(bg_path), (self.video_params.frame_width, self.video_params.frame_height))
         
-        self.out_writer_alpha = build_out_writer(output_path_alpha, self.video_params)
-        self.out_writer_matting = build_out_writer(output_path_matting, self.video_params)
-        self.out_writer_output = build_out_writer(output_path_final, self.video_params)
+        self.out_writer_alpha = get_video_writer(output_path_alpha, self.video_params)
+        self.out_writer_matting = get_video_writer(output_path_matting, self.video_params)
+        self.out_writer_output = get_video_writer(output_path_final, self.video_params)
         self.detections_json = detections_json_path
 
-        self.bboxs = np.zeros((self.video_params['frame_count'], 4))
+        self.bboxs = np.zeros((self.video_params.frame_num, 4))
 
         self.matting_detection()
         self.write_bounding_box_json()
@@ -266,7 +265,7 @@ class MattingMaker:
         This function performs matting and detection
         """
         print("Matting and Detection")
-        for i in tqdm(range(0, self.video_params['frame_count'])):
+        for i in tqdm(range(0, self.video_params.frame_num)):
             
             _, img_bgr = self.capture.read()
             _, binary_img = self.cap_binary.read()

@@ -6,7 +6,7 @@ import GeodisTK
 from skimage.filters import threshold_multiotsu
 from tqdm import tqdm
 
-from utils.video_utils_ref import get_video_parameters, build_out_writer
+from utils import parse_video, get_video_writer
 
 
 KDE_TEMPLATE_SIZE = 100000
@@ -186,11 +186,11 @@ class BackgroundSubtractor:
                  output_video_path_binary: str, output_video_path_extracted: str):
         
         self.capture = video_cap_stabilized
-        self.video_params = get_video_parameters(self.capture)
+        self.video_params = parse_video(self.capture)
         self.num_frames = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        self.out_writer_binary = build_out_writer(output_video_path_binary, self.video_params, 0)
-        self.out_writer_extracted = build_out_writer(output_video_path_extracted, self.video_params)
+        self.out_writer_binary = get_video_writer(output_video_path_binary, self.video_params, 0)
+        self.out_writer_extracted = get_video_writer(output_video_path_extracted, self.video_params)
 
     def apply(self) -> None:
         """

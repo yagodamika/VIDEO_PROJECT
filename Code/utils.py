@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 import cv2
+import json
+import time
 
 
 @dataclass
@@ -51,5 +53,21 @@ def get_video_writer(output_path: str, video_parameters: params, mode=None):
     writer = cv2.VideoWriter(output_path, fourcc, video_parameters.fps, (width, height), mode)
     return writer
 
-import json
-import time
+class Timing:
+    def __init__(self, output_path: str):
+        self.start_time = time.time()
+        self.timing_dict = {
+                "time_to_stabilize": 0,
+                "time_to_binary": 0,
+                "time_to_alpha": 0,
+                "time_to_matted": 0,
+                "time_to_output": 0
+            }
+        self.output_path = output_path
+
+    def log_time(self, stage: str) -> None:
+        self.timing_dict[stage] = time.time() - self.start_time
+
+    def dump(self) -> None:
+        with open(self.output_path, 'w') as json_handler:
+            json.dump(self.timing_dict, json_handler, indent=4)
