@@ -2,7 +2,7 @@ import os
 
 import cv2
 
-from background_subtraction import BackgroundSubtractor
+from background_subtraction import substactBackground
 from matting import MattingMaker
 from video_stabilization import Stabilizer
 from utils.general_utils_ref import Timing
@@ -34,7 +34,7 @@ def main():
 
     # Run background subtraction
     video_cap_stabilized = cv2.VideoCapture(os.path.join(OUTPUT_FOLDER, STABILIZE))
-    BackgroundSubtractor(video_cap_stabilized, os.path.join(OUTPUT_FOLDER, BINARY), os.path.join(OUTPUT_FOLDER, EXTRACTED))
+    substactBackground(video_cap_stabilized, os.path.join(OUTPUT_FOLDER, BINARY), os.path.join(OUTPUT_FOLDER, EXTRACTED))
     timing_object.write_time_of_stage("time_to_binary")
 
     # Run matting and detection
