@@ -2,9 +2,9 @@ import os
 
 import cv2
 
-from background_subtraction.background_subtraction_ref import BackgroundSubtractor
-from matting.matting_ref import MattingAndBBoxCreator
-from video_stabilization.video_stabilization_ref import VideoStabilizer
+from background_subtraction import BackgroundSubtractor
+from matting import MattingMaker
+from video_stabilization import Stabilizer
 from utils.general_utils_ref import Timing
 
 INPUT_VIDEO_PATH = "./Inputs/INPUT.mp4"
@@ -29,7 +29,7 @@ def main():
     video_cap = cv2.VideoCapture(INPUT_VIDEO_PATH)
 
     # # Run video stabilization
-    VideoStabilizer(video_cap, os.path.join(OUTPUT_FOLDER, STABILIZE))
+    Stabilizer(video_cap, os.path.join(OUTPUT_FOLDER, STABILIZE))
     timing_object.write_time_of_stage("time_to_stabilize")
 
     # Run background subtraction
@@ -44,7 +44,7 @@ def main():
     output_path_matting = os.path.join(OUTPUT_FOLDER, MATTED)
     output_path_final = os.path.join(OUTPUT_FOLDER, OUTPUT)
     output_detections_json_path = os.path.join(OUTPUT_FOLDER, TRACKING)
-    MattingAndBBoxCreator(video_cap_stabilized, video_cap_binary, BACKGROUND_PATH,
+    MattingMaker(video_cap_stabilized, video_cap_binary, BACKGROUND_PATH,
                           output_path_alpha, output_path_matting, output_path_final, output_detections_json_path)
 
     # Note as all 3 happen together, we finished writing them at the same time
