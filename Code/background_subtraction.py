@@ -17,77 +17,70 @@ PDF_HIST_LOW_THRESH = 0.002
 PDF_HIST_HIGH_THRESH = 0.998
 HIGH_PROB_FG_PIXELS_THRESH = 0.8
 
+class MixturesOfGaussians:
+    def __init__(self, num_frames: int, num_mixtures: int, var_threshold: int, is_forward: bool = True):
+        self.is_forward = is_forward
+        self.num_frames = num_frames
+
+        self.mog = cv2.createBackgroundSubtractorMOG2(history=num_frames)
+        self.mog.setNMixtures(num_mixtures)
+        self.mog.setVarThreshold(var_threshold)
+
+    def fit(self, capture: cv2.VideoCapture, nof_iterations: int) -> None:
+        """
+        Method fits the mog model to the video capture
+        :param capture: video capture
+        :param nof_iterations: number of iterations to run the fitting
+        :return: None
+        """
+
+        for i in range(nof_iterations):
+            # start capture from beginning
+            capture.set(1, 0)
+
+            for frame_idx in range(self.num_frames):
+                if not self.is_forward:
+                    capture.set(1, self.num_frames - frame_idx - 1)
+                
+                _, img = capture.read()
+                self.mog.apply(img, learningRate=None)
+
+    def apply(self, img: np.ndarray) -> np.ndarray:
+        """
+        Method applies the mog model to an image
+        :param img: image to apply mog on
+        :return: fg mask
+        """
+
+        return self.mog.apply(img, learningRate=0)
 
 class BackgroundSubtractor:
-    def __init__(self, video_cap_stabilized: cv2.VideoCapture, output_video_path_binary: str, output_video_path_extracted: str):
-        self.cap = video_cap_stabilized
-        self.video_params = get_video_parameters(self.cap)
-        self.num_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    def __init__(self, video_cap_stabilized: cv2.VideoCapture,
+                 output_video_path_binary: str, output_video_path_extracted: str):
+        
+        self.capture = video_cap_stabilized
+        self.video_params = get_video_parameters(self.capture)
+        self.num_frames = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
+
         self.out_writer_binary = build_out_writer(output_video_path_binary, self.video_params, 0)
         self.out_writer_extracted = build_out_writer(output_video_path_extracted, self.video_params)
 
-        self.mog_f = self.build_mog(5, 4)  # Runs on video playing forward, used for first part of movie
-        self.mog_b = self.build_mog(5, 4)  # Runs on video playing backward, used for second part of movie
-        print("Training MoG Models")
-        self.train_mog(number_of_train_loops=5, mog=self.mog_f, back_train=False)
-        self.train_mog(number_of_train_loops=5, mog=self.mog_b, back_train=True)
+        self.forward_mog = MixturesOfGaussians(num_frames=self.num_frames, num_mixtures=5, var_threshold=4, is_forward=True)
+        self.backward_mog = MixturesOfGaussians(num_frames=self.num_frames, num_mixtures=5, var_threshold=4, is_forward=False)
+        self.forward_mog.fit(self.capture, 5)
+        self.backward_mog.fit(self.capture, 5)
 
         self.accumulative_kde_template = None
         self.kde = None
         self.hist_min_val = 0
         self.hist_max_val = 255
-        self.build_kde_and_hist_values(num_of_frames_for_template=5)
+        self.build_kde_and_hist_values(nof_frames_for_template=5)
         self.last_trained_frame = 5
 
         self.run_mog_on_movie_and_save_output()
 
         self.out_writer_binary.release()
         self.out_writer_extracted.release()
-
-    def build_mog(self, num_mixtures: int, var_threshold: int) -> cv2.BackgroundSubtractor:
-        """
-        Method builds a MOG (Mixture of Gaussian's) object with required parameters
-        :param num_mixtures: number of gaussian mixtures to use for MOG
-        :param var_threshold: threshold for considering BG/FG object
-        :return: MOG object
-        """
-        mog = cv2.createBackgroundSubtractorMOG2(history=int(self.num_frames))
-        mog.setNMixtures(num_mixtures)
-        mog.setVarThreshold(var_threshold)
-
-        return mog
-
-    @staticmethod
-    def bgr_pass_through_mog(bgr_image: np.ndarray, mog: cv2.BackgroundSubtractor, train: bool) -> np.ndarray:
-        """
-        Performs apply of image to mog object
-        :param bgr_image: input image
-        :param train: signals if mog is train or inference mode
-        :param mog: mog object
-        :return: fg map returned from mog
-        """
-        learning_rate = None if train else 0
-        return mog.apply(bgr_image, learningRate=learning_rate)
-
-    def train_mog(self, number_of_train_loops: int, mog: cv2.BackgroundSubtractor, back_train: bool) -> None:
-        """
-        Method "trains" the mog object
-        :param number_of_train_loops: number of times iterating over the movie to "train" the mog
-        :param mog: mog object
-        :param back_train: signals if to train backwards
-        :return: None
-        """
-        # Initial training
-        for loop_num in range(number_of_train_loops):
-            # Rewind cap to first frame
-            self.cap.set(1, 0)
-
-            # Iterate over all frames and train mog
-            for frame in range(self.num_frames):
-                if back_train:
-                    self.cap.set(1, self.num_frames - frame - 1)
-                ret, img = self.cap.read()
-                _ = self.bgr_pass_through_mog(img, mog, train=True)
 
     @staticmethod
     def post_process_fg(fg, opening: bool = True, closing: bool = True) -> np.ndarray:
@@ -127,21 +120,22 @@ class BackgroundSubtractor:
 
         return fg
 
-    def build_kde_and_hist_values(self, num_of_frames_for_template: int) -> None:
+    def build_kde_and_hist_values(self, nof_frames_for_template: int) -> None:
         """
         Method builds a kde object dnd a min max value from GS histogram used for choosing pixels to use or filter
         :param num_of_frames_for_template: number of frames used for template of building KDE and histogram
         :return: None
         """
-        self.cap.set(1, 0)
+        # start capture from beginning
+        self.capture.set(1, 0)
 
         self.accumulative_kde_template = np.empty([0, 3])
         accumulative_gray_template = np.empty([0, 1])
 
         # Iterate over num_of_frames_for_template frames and build kde bgr and histogram grayscale template
-        for frame in range(num_of_frames_for_template):
-            ret, img = self.cap.read()
-            fg = self.bgr_pass_through_mog(img, self.mog_f, train=False)
+        for frame in range(nof_frames_for_template):
+            ret, img = self.capture.read()
+            fg = self.forward_mog.apply(img)
             fg = self.post_process_fg(fg)
             frame_template = img[fg == 255]
             img_gs = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -195,7 +189,7 @@ class BackgroundSubtractor:
         :return: None
         """
         # Start by setting video to first frame
-        self.cap.set(1, 0)
+        self.capture.set(1, 0)
 
         # prev_fg is used to calculate the difference from prev frame used to "signal" problematic frames
         prev_fg = None
@@ -203,12 +197,12 @@ class BackgroundSubtractor:
         # Iterate over all frames and run mog
         print("Background Subtraction phase")
         for frame in tqdm(range(self.num_frames)):
-            ret, img = self.cap.read()
+            ret, img = self.capture.read()
             # Split use of mog by part of movie
             if frame < self.num_frames//2:
-                fg = self.bgr_pass_through_mog(img, self.mog_f, train=False)
+                fg = self.forward_mog.apply(img)
             else:
-                fg = self.bgr_pass_through_mog(img, self.mog_b, train=False)
+                fg = self.backward_mog.apply(img)
 
             # Post process fg
             fg = self.post_process_fg(fg)
