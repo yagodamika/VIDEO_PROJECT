@@ -23,8 +23,8 @@ class Stabilizer:
 
     def apply_stabilization(self) -> None:
         """
-        Method iterates over all frames, stabilizes each frame to the first frame one using feature matching
-        :return: None
+        This function iterates over all frames, stabilizes each frame to the first 
+        frame one using SIFT feature matching
         """
         print("Video Stabilization")
         for i in tqdm(range(1, self.video_parameters.frame_num)):
