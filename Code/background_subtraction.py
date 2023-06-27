@@ -19,7 +19,7 @@ def mask_refinement(fg, do_5_5: bool = True, do_15_15: bool = True) -> np.ndarra
     """
     NOF_COMPONENTS = 1
 
-    # Take only values with 255 (no shadows)
+    # Take only values with 255
     fg[fg < 255] = 0
 
     # Build connected components, we will take the largest component as it's our fg object
@@ -279,7 +279,7 @@ class BackgroundSubtractor:
         cropped_fg = fg_probs[y:y+h, x:x+w]
         dist_map = GeodisTK.geodesic2d_raster_scan(cropped_fg.astype(np.float32), (cropped_fg > HIGH_PROB_FG_PIXELS_THRESH).astype(np.uint8), 1.0, 2)
         cropped_processed_conf = (dist_map.max() - dist_map)
-        cropped_processed_conf[cropped_fg < 0.001] = 0
+        cropped_processed_conf[cropped_fg < 0.002] = 0
 
         # Obtain a 3 level otsu thresholding creating 3 regions
         # When the size of the mid-region is large remove only the small region, else remove both lower ones

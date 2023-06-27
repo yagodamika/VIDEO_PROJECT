@@ -1,6 +1,7 @@
 import argparse
 import cv2
 import os
+import time
 
 from video_stabilization import stablize_video
 from background_subtraction import substact_background
@@ -36,11 +37,15 @@ def main():
     stablize_video(video_cap, stabilize_path)
     timing.log_time("time_to_stabilize")
 
+    time.sleep(1.5)
+
     # Run background subtraction
     print("Background Subtraction")
     video_cap_stabilized = cv2.VideoCapture(stabilize_path)
     substact_background(video_cap_stabilized, binary_path, extracted_path)
     timing.log_time("time_to_binary")
+
+    time.sleep(1.5)
 
     # Run matting and detection
     print("Matting and Detection")

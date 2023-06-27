@@ -14,7 +14,7 @@ class Stabilizer:
     def stabilize(self):
         _, frame = self.cap.read()
         self.out_writer.write(frame)
-        self.first_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        self.first_frame = frame
         
         self.apply_stabilization()
         self.out_writer.release()

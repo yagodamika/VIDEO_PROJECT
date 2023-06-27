@@ -54,7 +54,7 @@ def get_interest_crop(array: np.ndarray, bounding_box: Tuple) -> np.ndarray:
     """
     x, y, w, h = bounding_box
     p = PADDING
-    cut = array[y - p: y + h + p, x - p: x + w + p]
+    cut = array[y-p:y+h+p, x-p:x+w+p]
 
     return cut
 
@@ -71,8 +71,8 @@ def get_geodesic_dist_maps(cut_luma: np.ndarray, fg_st: np.ndarray, bg_st: np.nd
             fg_d_map: forground distance map
             bg_d_map: background distance map
         """
-    fg_d_map = geodesic2d_raster_scan(cut_luma, fg_st, 1.0, 2) + 1e-6
-    bg_d_map = geodesic2d_raster_scan(cut_luma, bg_st, 1.0, 2) + 1e-6
+    fg_d_map = geodesic2d_raster_scan(cut_luma, fg_st, 1.0, 2) + 1e-5
+    bg_d_map = geodesic2d_raster_scan(cut_luma, bg_st, 1.0, 2) + 1e-5
 
     return fg_d_map, bg_d_map
 
@@ -145,7 +145,7 @@ def get_alpha_map(binary_image: np.ndarray, image: np.ndarray) -> Tuple[np.ndarr
     x, y, w, h = bounding_box
     p = PADDING
     alpha_map = np.copy(trimap)
-    alpha_map[y - p: y + h + p, x - p:x + w + p] = alpha_cut
+    alpha_map[y-p:y+h+p, x-p:x+w+p] = alpha_cut
 
     return alpha_map, bounding_box
 
@@ -169,7 +169,7 @@ def calc_fg_value(fg_vals: np.ndarray, bg_vals: np.ndarray, pixel_val: np.ndarra
 
     """
     result_val = pixel_val
-    min_dist = 1000
+    min_dist = np.inf
     for fg in fg_vals:
         for bg in bg_vals:
             func = (alpha * fg + (1 - alpha) * bg)
@@ -196,7 +196,7 @@ def crop_window(input: np.ndarray, x: int, y: int, w: int) -> np.ndarray:
     Return:
         crop: a crop of the input
     """
-    crop = input[x - w: x + w + 1, y - w: y + w + 1]
+    crop = input[x-w:x+w+1, y-w:y+w+1]
     return crop
 
 
@@ -319,8 +319,6 @@ class MattingMaker:
         alpha_map_expanded = np.expand_dims(alpha_map, axis=-1)
         undecided_idxs = (undecided_vals != 0)
 
-        # TODO: check if loop is needed here ?
-        # for i in range(3):
         result = (alpha_map_expanded * img) + ((1 - alpha_map_expanded) * bg)
         result[undecided_idxs] = undecided_vals[undecided_idxs]
         result = np.clip(result, 0, 255)
