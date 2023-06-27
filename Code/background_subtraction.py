@@ -9,45 +9,37 @@ from tqdm import tqdm
 from utils import parse_video, get_video_writer
 
 
-KDE_TEMPLATE_SIZE = 100000
-TEMPERATURE_FACTOR = 50
-SEG_TIME_DIFF_THRESH = 8500
-SEG_TIME_DIFF_RETRAIN_THRESH = 7000
-PDF_HIST_LOW_THRESH = 0.002
-PDF_HIST_HIGH_THRESH = 0.998
-HIGH_PROB_FG_PIXELS_THRESH = 0.8
-
-
-def post_process_fg(fg, opening: bool = True, closing: bool = True) -> np.ndarray:
+def mask_refinement(fg, do_5_5: bool = True, do_15_15: bool = True) -> np.ndarray:
     """
     Method runs a post process on Bg which keeps only one largest component and runs opening and closing if required
     :param fg: fg mask
-    :param opening: signals if to run morphological opening (default True)
-    :param closing: signals if to run morphological closing (default True)
+    :param do_5_5: signals if to run morphological 5x5 kernel (default True)
+    :param do_15_15: signals if to run morphological 15x15 kernel (default True)
     :return: fg after post process
     """
+    NOF_COMPONENTS = 1
+
     # Take only values with 255 (no shadows)
     fg[fg < 255] = 0
 
-    # As we know this is a human walking, and we know th camera point of view, clear all pixels on top
-    h, w = fg.shape
-    fg[0:h//10, :] = 0
-
     # Build connected components, we will take the largest component as it's our fg object
-    nb_components, output, stats, centroids = cv2.connectedComponentsWithStats(fg, connectivity=4)
+    nb_components, output, stats, _ = cv2.connectedComponentsWithStats(fg, connectivity=4)
     sizes = stats[:, -1]
 
-    max_label = int(np.argmax(sizes[1:])) + 1
+    # Take the top component
     fg = np.zeros_like(output)
-    fg[output == max_label] = 255
+    for i in range(min(NOF_COMPONENTS, nb_components-1)):
+        max_label = int(np.argmax(sizes[1:])) + 1
+        fg[output == max_label] = 255
+        sizes = np.delete(sizes, max_label)
 
     # Run morphology of opening and closing to clean noise
-    if opening:
-        kernel_opening = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_OPEN, kernel_opening)
-    if closing:
-        kernel_closing = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
-        fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_CLOSE, kernel_closing)
+    if do_5_5:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    if do_15_15:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
 
     # Fix to binary values
     fg[fg < 127] = 0
@@ -80,24 +72,23 @@ class MixturesOfGaussians:
                 if not self.is_forward:
                     capture.set(1, self.num_frames - frame_idx - 1)
                 
-                _, img = capture.read()
-                self.mog.apply(img, learningRate=None)
+                _, frame = capture.read()
+                self.mog.apply(frame, learningRate=None)
 
-    def apply(self, img: np.ndarray) -> np.ndarray:
+    def apply(self, frame: np.ndarray) -> np.ndarray:
         """
         Method applies the mog model to an image
-        :param img: image to apply mog on
+        :param frame: image to apply mog on
         :return: fg mask
         """
+        return self.mog.apply(frame, learningRate=0)
 
-        return self.mog.apply(img, learningRate=0)
-
-class MyKernelDensity:
+class NoiseHandler:
     def __init__(self, capture: cv2.VideoCapture, forward_mog: MixturesOfGaussians, backward_mog: MixturesOfGaussians):
         self.capture = capture
         self.forward_mog = forward_mog
         self.backward_mog = backward_mog
-        self.kde = KernelDensity(bandwidth=0.3, kernel='gaussian', atol=0.000000005)
+        self.kde = KernelDensity(bandwidth=0.4, kernel='gaussian', atol=0.00000001)
 
         self.hist_min_val = 0
         self.hist_max_val = 255
@@ -117,12 +108,12 @@ class MyKernelDensity:
 
         # Iterate over num_of_frames_for_template frames and build kde bgr and histogram grayscale template
         for i in range(nof_frames_for_template):
-            ret, img = self.capture.read()
-            fg = self.forward_mog.apply(img)
-            fg = post_process_fg(fg)
-            frame_template = img[fg == 255]
-            img_gs = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            frame_template_gs = img_gs[fg == 255]
+            ret, frame = self.capture.read()
+            fg = self.forward_mog.apply(frame)
+            fg = mask_refinement(fg)
+            frame_template = frame[fg == 255]
+            frame_gary = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame_template_gs = frame_gary[fg == 255]
 
             # BGR KDE
             self.accumulative_kde_template = np.append(self.accumulative_kde_template, frame_template, axis=0)
@@ -130,12 +121,14 @@ class MyKernelDensity:
             # GS histogram
             self.accumulative_gray_template = np.append(self.accumulative_gray_template, np.expand_dims(frame_template_gs, 1), axis=0)
 
-    def fit(self, nof_frames_for_template: int) -> None:
+    def fit_kde(self, nof_frames_for_template: int) -> None:
         """
         Method fits the kde model to the template
         :param nof_frames_for_template: number of frames to use for template
         :return: None
         """
+        CDF_HIST_LOW_THRESH = 0.002
+        CDF_HIST_HIGH_THRESH = 0.998
 
         self.get_template(nof_frames_for_template)
 
@@ -145,41 +138,35 @@ class MyKernelDensity:
         # GS unused values
         probs, bins = np.histogram(self.accumulative_gray_template.flatten(), bins=30, density=True)
         dx = bins[1] - bins[0]
-        pdf = np.cumsum(probs) * dx
+        cdf = np.cumsum(probs) * dx
 
-        # We set a threshold for cleaning fg according to template PDF. Note we clear from edges and not from middle
-        if len(np.where(pdf < PDF_HIST_LOW_THRESH)[0]) > 0:
-            self.hist_min_val = bins[np.max(np.where(pdf < PDF_HIST_LOW_THRESH))]
-        else:
-            self.hist_min_val = 0
+        # Remove the extreme values from the histogram
+        self.hist_min_val = bins[np.max(np.where(cdf < CDF_HIST_LOW_THRESH))] if len(np.where(cdf < CDF_HIST_LOW_THRESH)[0]) > 0 else 0
+        self.hist_max_val = bins[np.min(np.where(cdf > CDF_HIST_HIGH_THRESH))] if len(np.where(cdf > CDF_HIST_HIGH_THRESH)[0]) > 0 else 255
 
-        if len(np.where(pdf > PDF_HIST_HIGH_THRESH)[0]) > 0:
-            self.hist_max_val = bins[np.min(np.where(pdf > PDF_HIST_HIGH_THRESH))]
-        else:
-            self.hist_max_val = 255
-
-    def refit(self, additional_pixels: np.ndarray) -> None:
+    def refit_kde(self, additional_pixels: np.ndarray) -> None:
         """
         Method refits the kde model to the template
         :param additional_pixels: additional pixels to add to template
         :return: None
         """
+        KDE_TEMPLATE_SIZE = 100000
         
         self.accumulative_kde_template = np.append(self.accumulative_kde_template, additional_pixels, axis=0)
         # If len of KDE is above KDE_TEMPLATE_SIZE keep only size
         if len(self.accumulative_kde_template) > KDE_TEMPLATE_SIZE:
             self.accumulative_kde_template = self.accumulative_kde_template[-KDE_TEMPLATE_SIZE:]
-        self.kde = KernelDensity(bandwidth=0.3, kernel='gaussian', atol=0.000000005)
+        self.kde = KernelDensity(bandwidth=0.4, kernel='gaussian', atol=0.00000001)
         self.kde.fit(self.accumulative_kde_template)
 
-    def score_samples(self, img: np.ndarray) -> np.ndarray:
+    def score_samples(self, frame: np.ndarray) -> np.ndarray:
         """
         Method scores samples using kde
-        :param img: image to score
+        :param frame: image to score
         :return: scores
         """
 
-        return self.kde.score_samples(img)
+        return self.kde.score_samples(frame)
 
 class BackgroundSubtractor:
     def __init__(self, video_cap_stabilized: cv2.VideoCapture,
@@ -197,29 +184,29 @@ class BackgroundSubtractor:
         Method runs background subtraction on entire video
         :return: None
         """
-
-        print("Background Subtraction")
         self.forward_mog = MixturesOfGaussians(num_frames=self.num_frames, num_mixtures=5, var_threshold=4, is_forward=True)
         self.backward_mog = MixturesOfGaussians(num_frames=self.num_frames, num_mixtures=5, var_threshold=4, is_forward=False)
         self.forward_mog.fit(self.capture, 5)
         self.backward_mog.fit(self.capture, 5)
 
-        self.kde = MyKernelDensity(self.capture, self.forward_mog, self.backward_mog)
-        self.kde.fit(5)
-        self.last_trained_frame = 5 # We start with 5 frames for template
-        self.hist_min_val = self.kde.hist_min_val
-        self.hist_max_val = self.kde.hist_max_val
+        nof_frames_for_template = 5
+        self.noiseHandler = NoiseHandler(self.capture, self.forward_mog, self.backward_mog)
+        self.noiseHandler.fit_kde(nof_frames_for_template)
+        self.last_trained_frame = nof_frames_for_template # We start with 5 frames for template
+        self.hist_min_val = self.noiseHandler.hist_min_val
+        self.hist_max_val = self.noiseHandler.hist_max_val
 
-        self.run_mog_on_video_and_save_output()
+        self.run_substraction()
 
         self.out_writer_binary.release()
         self.out_writer_extracted.release()
 
-    def run_mog_on_video_and_save_output(self) -> None:
+    def run_substraction(self) -> None:
         """
-        Method runs background subtraction on entire video frame by frame
+        Runs background subtraction on video frame by frame
         :return: None
         """
+
         # start capture from beginning
         self.capture.set(1, 0)
 
@@ -227,45 +214,37 @@ class BackgroundSubtractor:
         prev_fg = None
 
         # Iterate over all frames and run mog
-        for frame in tqdm(range(self.num_frames)):
-            _, img = self.capture.read()
+        for frame_id in tqdm(range(self.num_frames)):
+            _, frame = self.capture.read()
 
             # Use forward mog for first half of frames and backward for second half
-            if frame < self.num_frames//2:
-                fg = self.forward_mog.apply(img)
-            else:
-                fg = self.backward_mog.apply(img)
+            mog = self.forward_mog if frame_id < self.num_frames//2 else self.backward_mog
+            fg = mog.apply(frame)
 
-            # Post process fg
-            fg = post_process_fg(fg)
-            # Saving a copy of fg at this point to allow filling holes later for wrong removed pixels in histogram removal
-            fg_before_histogram_removal = np.copy(fg)
+            # Refine mask
+            fg = mask_refinement(fg)
+            inital_background = fg < 255
 
             # Remove the unused values according to hist
-            img_gs = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            fg[img_gs < self.hist_min_val] = 0
-            fg[img_gs > self.hist_max_val] = 0
+            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            fg[np.logical_or(frame_gray < self.hist_min_val, frame_gray > self.hist_max_val)] = 0
 
-            # Saving a copy after histogram removal for further computation on big diff frames
-            fg_after_histogram_removal = np.copy(fg)
-
-            # From the 5th frame on (as the first 5 were used for templating) we check the time derivative
-            # change in the direction of the movement to "signal" frames which might contain noise
-            if frame > 5:
+            # the first 5 were used for templating, so we skip them
+            if frame_id > 5:
                 # Get the time diff of fg in the direction of the movement
                 seg_time_diff = fg - prev_fg
                 seg_time_diff = seg_time_diff * (seg_time_diff > 0)
                 # If diff is large, use kde refinement to clear noise
-                if (np.sum(seg_time_diff) / 255) > SEG_TIME_DIFF_THRESH:
-                    fg = self.refine_fg_using_kde(fg_after_histogram_removal, img)
+                if (np.sum(seg_time_diff) / 255) > 7500:
+                    fg = self.kde_mask_refinement(fg, frame)
 
                 # If change is small and kde hasn't been retrained in last 5 frames, retrain kde
-                elif ((np.sum(seg_time_diff) / 255) < SEG_TIME_DIFF_RETRAIN_THRESH) and (frame - self.last_trained_frame >= 5):
-                    self.kde.refit(img[fg > 0])
-                    self.last_trained_frame = frame
+                elif ((np.sum(seg_time_diff) / 255) < 6500) and (frame_id - self.last_trained_frame >= 5):
+                    self.noiseHandler.refit_kde(frame[fg > 0])
+                    self.last_trained_frame = frame_id
 
             fg = binary_fill_holes(fg).astype(np.uint8) * 255
-            fg[fg_before_histogram_removal < 255] = 0
+            fg[inital_background] = 0
 
             # save_prev_fg
             prev_fg = np.copy(fg)
@@ -274,30 +253,30 @@ class BackgroundSubtractor:
             self.out_writer_binary.write(fg)
 
             # Extract person and write to extracted
-            extracted_frame = np.zeros_like(img)
-            extracted_frame[fg == 255] = img[fg == 255]
+            extracted_frame = np.zeros_like(frame)
+            extracted_frame[fg == 255] = frame[fg == 255]
 
             self.out_writer_extracted.write(extracted_frame)
 
-    def refine_fg_using_kde(self, fg: np.ndarray, img: np.ndarray) -> np.ndarray:
+    def kde_mask_refinement(self, fg: np.ndarray, frame: np.ndarray) -> np.ndarray:
         """
         Method refines fg map using kde on image pixels
         :param fg: estimated fg, likely to have noise
-        :param img: bgr image
+        :param frame: bgr image
         :return: a refined fg
         """
-        # Get the img pixels in fg locations
-        img_fg_pixels = img[fg == 255]
+        HIGH_PROB_FG_PIXELS_THRESH = 0.8
+        TEMPERATURE_FACTOR = 48
 
         # Turn scoring into probability
-        log_likelihood_img_pixel_results = self.kde.score_samples(img_fg_pixels)
-        log_likelihood_img_pixel_results = np.exp(log_likelihood_img_pixel_results / TEMPERATURE_FACTOR)
+        log_likelihood_frame_pixel_results = self.noiseHandler.score_samples(frame[fg == 255])
+        log_likelihood_frame_pixel_results = np.exp(log_likelihood_frame_pixel_results / TEMPERATURE_FACTOR)
         fg_probs = np.zeros_like(fg, dtype=np.float)
-        fg_probs[fg == 255] = log_likelihood_img_pixel_results
+        fg_probs[fg == 255] = log_likelihood_frame_pixel_results
 
         # We will build a geodesic distance map using "likely" fg pixels and turn it into confidences
         x, y, w, h = cv2.boundingRect(fg)
-        cropped_fg = fg_probs[y:y + h, x:x + w]
+        cropped_fg = fg_probs[y:y+h, x:x+w]
         dist_map = GeodisTK.geodesic2d_raster_scan(cropped_fg.astype(np.float32), (cropped_fg > HIGH_PROB_FG_PIXELS_THRESH).astype(np.uint8), 1.0, 2)
         cropped_processed_conf = (dist_map.max() - dist_map)
         cropped_processed_conf[cropped_fg < 0.001] = 0
@@ -312,13 +291,11 @@ class BackgroundSubtractor:
         cropped_processed_conf[cropped_processed_conf > thresholds[reg]] = 255
         cropped_processed_conf[cropped_processed_conf <= thresholds[reg]] = 0
         fg = np.zeros_like(fg, dtype=np.uint8)
-        fg[y:y + h, x:x + w] = cropped_processed_conf.astype(np.uint8)
+        fg[y:y+h, x:x+w] = cropped_processed_conf.astype(np.uint8)
 
         # Rerun post process on fg
-        fg = post_process_fg(fg, opening=False)
-
-        return fg
+        return mask_refinement(fg, do_15_15=False)
     
-def substactBackground(video_cap_stabilized: cv2.VideoCapture, output_video_path_binary: str, output_video_path_extracted: str) -> None:
+def substact_background(video_cap_stabilized: cv2.VideoCapture, output_video_path_binary: str, output_video_path_extracted: str) -> None:
     backgroundSubtractor = BackgroundSubtractor(video_cap_stabilized, output_video_path_binary, output_video_path_extracted)
     backgroundSubtractor.apply()

@@ -279,7 +279,7 @@ def get_binary_img(binary_img: np.ndarray) -> np.ndarray:
 
 
 class MattingMaker:
-    def __init__(self, cap: cv2.VideoCapture, cap_binary: cv2.VideoCapture, bg_path: str,
+    def __init__(self, cap: cv2.VideoCapture, cap_binary: cv2.VideoCapture, background_img: np.ndarray,
                  output_path_alpha: str, output_path_matting: str, output_path_final: str,
                  detections_json_path: str):
 
@@ -287,13 +287,14 @@ class MattingMaker:
         self.cap_binary = cap_binary
 
         self.video_params = parse_video(self.capture)
-        self.bg = cv2.resize(cv2.imread(bg_path), (self.video_params.frame_width, self.video_params.frame_height))
+        self.bg = cv2.resize(background_img, (self.video_params.frame_width, self.video_params.frame_height))
 
         self.out_writer_alpha = get_video_writer(output_path_alpha, self.video_params)
         self.out_writer_matting = get_video_writer(output_path_matting, self.video_params)
         self.out_writer_output = get_video_writer(output_path_final, self.video_params)
         self.detections_json = detections_json_path
 
+    def apply(self):
         self.bboxs = np.zeros((self.video_params.frame_num, 4))
 
         self.matting_detection()
@@ -351,7 +352,6 @@ class MattingMaker:
         """
         This function performs matting and detection
         """
-        print("Matting and Detection")
         for i in tqdm(range(0, self.video_params.frame_num)):
             _, img_bgr = self.capture.read()
             _, binary_img = self.cap_binary.read()
@@ -398,3 +398,9 @@ class MattingMaker:
             json.dump(dict, h, indent=4)
 
 
+def paste_object_on_background(cap: cv2.VideoCapture, cap_binary: cv2.VideoCapture, bg_path: str,
+                               output_path_alpha: str, output_path_matting: str, output_path_final: str,
+                               detections_json_path: str):
+    background_img = cv2.imread(bg_path)
+    matting_maker = MattingMaker(cap, cap_binary, background_img, output_path_alpha, output_path_matting, output_path_final, detections_json_path)
+    matting_maker.apply()

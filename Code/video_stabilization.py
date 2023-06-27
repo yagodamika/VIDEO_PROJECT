@@ -10,9 +10,8 @@ class Stabilizer:
         self.cap = capture
         self.video_parameters = parse_video(self.cap)
         self.out_writer = get_video_writer(output_path, self.video_parameters)
-        self.transform_matrix = np.eye(3)
-        
-        # get first frame and write it to output video
+
+    def stabilize(self):
         _, frame = self.cap.read()
         self.out_writer.write(frame)
         self.first_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -26,7 +25,6 @@ class Stabilizer:
         This function iterates over all frames, stabilizes each frame to the first 
         frame one using SIFT feature matching
         """
-        print("Video Stabilization")
         for i in tqdm(range(1, self.video_parameters.frame_num)):
             _, frame = self.cap.read()
             # calculate transformation to the frame before
@@ -58,7 +56,11 @@ class Stabilizer:
         np_dest_points = np.float32(dest_points)
         
         # get homography using matching points
-        trans_mat, outliers = cv2.findHomography(np_dest_points.reshape(-1, 1, 2), np_source_points.reshape(-1, 1, 2),
+        trans_mat, _ = cv2.findHomography(np_dest_points.reshape(-1, 1, 2), np_source_points.reshape(-1, 1, 2),
                                                       method=cv2.RANSAC, confidence=0.99)
 
         return trans_mat
+
+def stablize_video(capture: cv2.VideoCapture, output_path: str):
+    stabilizer = Stabilizer(capture, output_path)
+    stabilizer.stabilize()
