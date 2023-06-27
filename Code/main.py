@@ -12,7 +12,7 @@ ID2 = '208687129'
 
 def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
-    parser.add_argument('--input_video', type=str, default="./Inputs/INPUT.mp4", help='Path to input video file')
+    parser.add_argument('--input_video', type=str, default="./Inputs/INPUT.avi", help='Path to input video file')
     parser.add_argument('--background_img', type=str, default="./Inputs/background.jpg", help='Path to input background file')
     parser.add_argument('--output_video_folder', type=str, default="./Outputs", help='Path to output video folder')
     args = parser.parse_args()
