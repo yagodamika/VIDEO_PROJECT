@@ -1,7 +1,6 @@
 import argparse
 import cv2
 import os
-import time
 
 from video_stabilization import stablize_video
 from background_subtraction import substact_background
@@ -19,6 +18,7 @@ def main():
     args = parser.parse_args()
 
     # Setup paths
+    os.makedirs(args.output_video_folder, exist_ok=True)
     timing_path = os.path.join(args.output_video_folder, "timing.json")
     tracking_path = os.path.join(args.output_video_folder, "tracking.json")
     stabilize_path = os.path.join(args.output_video_folder, f"stabilize_{ID1}_{ID2}.avi")
@@ -37,15 +37,11 @@ def main():
     stablize_video(video_cap, stabilize_path)
     timing.log_time("time_to_stabilize")
 
-    time.sleep(1.5)
-
     # Run background subtraction
     print("Background Subtraction")
     video_cap_stabilized = cv2.VideoCapture(stabilize_path)
     substact_background(video_cap_stabilized, binary_path, extracted_path)
     timing.log_time("time_to_binary")
-
-    time.sleep(1.5)
 
     # Run matting and detection
     print("Matting and Detection")
